@@ -1,0 +1,301 @@
+---
+title: "Expected Revenue from NBA Playoffs"
+author: "Dan Salo"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The `files` code block reads in the wins and revenue data.
+
+```{r files}
+revs <- read.csv("/abs/path/to/NBA-Analytics/gate-revenue/data/revs.csv", header=TRUE, sep=",")
+wins <- read.csv("/abs/path/to/NBA-Analytics/gate-revenue/data/wins.csv", header=TRUE, sep=",")
+```
+
+The `gate-revenue-plot` code block plots a grouped bar chart dislaying the expected gate revenue at NBA stadiums for each round of the playoffs.
+
+```{r gate-revenue-plot, message=FALSE, warning=FALSE}
+library(plotly)
+plot_ly(revs, x = ~HomeTeam, y = ~Round1_Gate, type = 'bar', name = 'Round 1', marker = list(color = 'rgb(0, 12195182)')) %>%
+  add_trace(y = ~Round2_Gate, name = 'Round 2', marker = list(color = 'rgb(240, 81, 51)')) %>%
+  add_trace(y = ~Round3_Gate, name = 'Round 3', marker = list(color = 'rgb(253, 187, 48)')) %>%
+  add_trace(y = ~Round4_Gate, name = 'Round 4', marker = list(color = 'rgb(0, 45, 98)')) %>%
+  layout(title = 'Expected Gate Revenue at NBA Stadiums',
+         xaxis = list(
+           title = "",
+           tickfont = list(
+             size = 14,
+             color = 'rgb(107, 107, 107)')),
+         yaxis = list(
+           title = 'Revenue ($)',
+           titlefont = list(
+             size = 16,
+             color = 'rgb(107, 107, 107)'),
+           tickfont = list(
+             size = 14,
+             color = 'rgb(107, 107, 107)')),
+         legend = list(x = 0.8, y = 1, bgcolor = 'rgba(255, 255, 255, 0)', bordercolor = 'rgba(255, 255, 255, 0)'),
+         barmode = 'group', bargap = 0.15)
+```
+
+The `functions` code block reads in the included CSV files and defines the functions necessary to simulate entire playoff series and determine the amount of revenue produced.
+
+```{r functions}
+# We define a function `predict_revenue` that will give the expected revenue and the probability of the home team advancing:
+predict_revenue <- function(p_a, p_h, rev) {
+
+  # First, predict the chance of games going to 4,5,6 or 7 games.
+  ## Probability of a 7-game series
+  p7 = choose(3,2)* choose(3,1) * ( p_h^2*p_a^2*(1-p_h)^2*(1-p_a) + (1-p_a)^2*(1-p_h)^2*p_h^2*p_a) + choose(3,1) * choose(3,2)* ( p_h^3*p_a*(1-p_a)^2*(1-p_h) + (1-p_a)*(1-p_h)^3*p_a^2*p_h ) + ( p_h*p_a^3*(1-p_h)^3 + (1-p_a)^3*(1-p_h)*p_h^3 ) + ( p_h^4*(1-p_a)^3 + (1-p_h)^4*p_a^3 )
+
+  ## Probability of a 6-game series
+  p6 = choose(2,1)* choose(3,1)* ( p_h^2*p_a^2*(1-p_h)*(1-p_a) + (1-p_a)^2*(1-p_h)^2*p_h*p_a) + ( p_h^3*p_a*(1-p_a)^2 + (1-p_a)*(1-p_h)^3*p_a^2 ) + choose(3,2) * ( p_h*p_a^3*(1-p_h)^2 + (1-p_a)^3*(1-p_h)*p_h^2 )
+
+  ## Probability of a 5-game series
+  p5 = choose(2,1) * (p_h^2*p_a^2*(1-p_h) + (1-p_a)^2*(1-p_h)^2*p_h) + choose(2,1) * ( p_h^3*p_a*(1-p_a) + (1-p_a)*(1-p_h)^3*p_a)
+
+  ## Probability of a 4-game series
+  p4 = (p_h^2*p_a^2 + (1-p_a)^2*(1-p_h)^2)
+
+  ## Expected value computation
+  money = p4 * 4 * rev + p5 * 5* rev + p6 * 6 * rev + p7 * 7 * rev
+
+  # Next, predict the winner
+  home <- 0
+  ## Probability home advancing after 7
+  home <- home + choose(3,2)* choose(3,1) * p_h^2*p_a^2*(1-p_h)^2*(1-p_a) +  choose(3,1) * choose(3,2)* p_h^3*p_a*(1-p_a)^2*(1-p_h) + p_h*p_a^3*(1-p_h)^3 + p_h^4*(1-p_a)^3
+
+  ## Probability home advancing after 6
+  home <- home + choose(2,1)* choose(3,1)* p_h^2*p_a^2*(1-p_h)*(1-p_a) + p_h^3*p_a*(1-p_a)^2 + choose(3,2) * p_h*p_a^3*(1-p_h)^2
+
+  ## Probability home advancing after 5
+  home <- home + choose(2,1) * p_h^2*p_a^2*(1-p_h) + choose(2,1) * p_h^3*p_a*(1-p_a)
+
+  ## Probability home advancing after 4
+  home <- home + p_h^2*p_a^2
+
+  return(c(money, home))
+}
+
+#We need to define a function that determine which team is home and away, assuming the if two teams with the same seed from different conferences meet then the team from the West has the home court advantage:
+
+home_away <- function(team1, team2) {
+  # Preset the home/away teams
+  home <- team1
+  away <- team2
+
+  # Extract seed and conference from string
+  num1 <- as.numeric(substr(team1,nchar(team1), nchar(team1)))
+  conf1 <- substr(team1,1, 4)
+  num2 <- as.numeric(substr(team1,nchar(team1), nchar(team1)))
+  conf2 <- substr(team2,1, 4)
+
+  # Do logic to send back home/away team
+  if (conf1 != conf2) {
+    if (num1 == num2) {
+      if (conf1 == 'East') {
+        home <- team2
+        away <- team1
+      }
+    }
+  }
+  if (num1 < num2) {
+    home <- team1
+    away <- team2
+  }
+
+  return(list('home' = home, 'away' = away))
+}
+
+#Next, we wrap `predict_revenue` in another function called `simulate_round` that will analyze all the matchups within that round for one conference:
+
+simulate_conf_round <- function(round, teams) {
+  round_rev <- 0
+  winners <- c()
+  for (e in seq(nrow(teams))) {
+    # Get wins data
+    team1 <- teams[e,1]
+    team2 <- teams[e,2]
+    sorted_teams <- home_away(team1, team2)
+    row <- wins[ which(wins$Team1 == sorted_teams$home & wins$Team2 == sorted_teams$away), ]
+    p_h <- row$Prob1WinsHome
+    p_a <- row$Prob1WinsAway
+
+    # Get gate revenue datas
+    rev <- as.numeric(revs[ which(revs$HomeTeam == sorted_teams$home),][sprintf('Round%d_Gate', round)])
+
+    # Update revenue for round
+    result <- predict_revenue(p_h, p_a, rev)
+    round_rev <- round_rev + result[1]
+
+    # Update winners circle
+    winner <- NULL
+    if (runif(1,0,1) < result[2]) {
+      winner <- sorted_teams$home
+    } else {
+      winner <- sorted_teams$away
+    }
+    winners <- c(winners, winner)
+  }
+  return(list('rev' = round_rev, 'winners' = winners))
+}
+
+# Since rounds 1,2,3 only involve teams within the conference, we can automate those simulations using a general function.
+simulate_full_round <- function(round, state, print_bool=FALSE) {
+
+  ## Simulate both conferences
+  resultEast = simulate_conf_round(round, state$east_teams[[round]])
+  resultWest = simulate_conf_round(round, state$west_teams[[round]])
+
+  ## Update State
+  row = c(2,1,1)
+  state$east_teams[[round+1]] <- matrix(resultEast$winners, nrow=row[round], byrow=TRUE)
+  state$west_teams[[round+1]] <- matrix(resultWest$winners, nrow=row[round], byrow=TRUE)
+  state$west_revs[round] <- resultWest$rev
+  state$east_revs[round] <- resultEast$rev
+
+  ## Print Totals
+  if (print_bool) {
+    sprintf('Western Conference Round 1 Revenue (mil): %f', resultWest$rev / 10^6)
+    sprintf('Eastern Conference Round 1 Revenue (mil): %f', resultEast$rev / 10^6)
+    sprintf('Total Round 1 Revenue (mil): %f', (resultWest$rev + resultEast$rev) / 10^6)
+    sprintf('Total Revenue after Round 1 (mil): %f', sum(RevTotal) / 10^6)
+  }
+
+  return(state)
+}
+
+simulate_finals <- function(state) {
+  playoff_teams = matrix(c(state$east_teams[[4]], state$west_teams[[4]]), nrow=1, byrow=TRUE)
+  result = simulate_conf_round(4, playoff_teams)
+
+  ## Update State
+  state$finals_rev = result$rev
+
+  return(state)
+}
+
+simulate_playoffs <- function() {
+  # Define 1st round games and initialize 2nd and 3rd round for East/West
+  east1 = matrix(c('East1', 'East8', 'East4', 'East5', 'East3', 'East6', 'East2', 'East7'), ncol=2, byrow=TRUE)
+  west1 = matrix(c('West1', 'West8', 'West4', 'West5', 'West3', 'West6', 'West2', 'West7'), ncol=2, byrow=TRUE)
+
+  # Initialize State
+  state <- list('east_revs' = c(), 'west_revs' = c(), 'east_teams' = list(east1), 'west_teams' = list(west1), 'finals_revs' = 0)
+
+  # Simulate first 3 rounds
+  state = simulate_full_round(1, state)
+  state = simulate_full_round(2, state)
+  state = simulate_full_round(3, state)
+
+  # Simulate Finals game
+  state = simulate_finals(state)
+  return(state)
+}
+```
+
+The `main` code block will simulate $S$ number of playoffs and track the teams that advanced and the money generated.
+
+```{r main}
+# Initialize
+total <- c()
+counts <- list(big = 0, small = 0)
+all_teams <- list('East8' = 0, 'East7' = 0, 'East6' = 0, 'East5' = 0, 'East4' = 0, 'East3' = 0, 'East2' = 0, 'East1' = 0, 'West1' = 0, 'West2' = 0, 'West3' = 0, 'West4' = 0, 'West5' = 0, 'West6' = 0, 'West7' = 0, 'West8' = 0)
+teams <- list(big = list(round2 = all_teams, round3 = all_teams, round4 = all_teams), small = list(round2 = all_teams, round3 = all_teams, round4 = all_teams))
+
+# Helper function
+matrix_expand <- function(mat) {
+  output <- c()
+  for (r in seq(nrow(mat))) {
+    for (c in seq(ncol(mat))) {
+      output <- c(output, mat[r,c])
+    }
+  }
+  return(output)
+}
+
+team_tally <- function(ste, tms, size) {
+  for (round in c(2,3,4)) {
+    for (t in matrix_expand(ste$west_teams[[round]])) {
+      tms[[size]][[sprintf('round%d', round)]][[t]] <- tms[[size]][[sprintf('round%d', round)]][[t]] + 1
+    }
+    for (t in matrix_expand(ste$east_teams[[round]])) {
+      tms[[size]][[sprintf('round%d', round)]][[t]] <- tms[[size]][[sprintf('round%d', round)]][[t]] + 1
+    }
+  }
+  return(tms)
+}
+
+S <- 1000
+for (i in seq(S)) {
+  state = simulate_playoffs()
+  rev = sum(state$east_revs) + sum(state$west_Revs) + state$finals_rev
+  total <- c(total, rev)
+  if ((115 * 10^6) < rev & rev < (120 * 10^6)) {
+    counts$small = counts$small + 1
+    teams <- team_tally(state, teams, 'small')
+  }
+  if ((155 * 10^6) < rev & rev < (165 * 10^6)) {
+    counts$big = counts$big + 1
+    teams <- team_tally(state, teams, 'big')
+  }
+}
+```
+
+The `expected-revenue-plot` code block will generate a normalized histogram of the possible revenue outcomes after running the simulations.
+
+```{r expected-revenue-plot}
+plot_ly(x = total, type = "histogram", histnorm = "probability",
+             marker = list(color = 'rgb(0,131,72)',
+                           line = list(color = 'rgb(0,0,0)', width = 1.5))) %>%
+  layout(title = 'Probability Distribution of Revenue',
+           xaxis = list(
+             title = "Revenue ($)",
+             tickfont = list(
+               size = 14,
+               color = 'rgb(107, 107, 107)')),
+           yaxis = list(
+             title = 'Probability',
+             titlefont = list(
+               size = 16,
+               color = 'rgb(107, 107, 107)'),
+             tickfont = list(
+               size = 14,
+               color = 'rgb(107, 107, 107)')))
+```
+
+The probability distribution of revenue is bimodal, with the two modes account for about 75\% of the possible outcomes, so we will investigate the teams that advanced in each scenario. The `team-plots` code block will generate a grouped bar chart for each round with the teams that advanced when the total playoff revenue was $160 million and $120 million.
+```{r teams-plots}
+
+plot_bar <- function(tms, r) {
+  data <- data.frame(t(rbind(data.frame(tms$big[[sprintf('round%d', r)]])/counts$big, data.frame(tms$small[[sprintf('round%d', r)]])/counts$small)))
+  names(data) <- c('big','small')
+  p <- plot_ly(data, x = names(all_teams), y = ~big, type = 'bar', name = '$160 mil', marker = list(color = 'rgb(0, 107, 182)')) %>%
+    add_trace(y = ~small, name = '$120 mil', marker = list(color = 'rgb(134, 0, 56)')) %>%
+    layout(title = sprintf('Round %d Teams', r),
+           xaxis = list(
+             title = "",
+             tickfont = list(
+               size = 14,
+               color = 'rgb(107, 107, 107)')),
+           yaxis = list(
+             title = 'Percentage of Category',
+             titlefont = list(
+               size = 16,
+               color = 'rgb(107, 107, 107)'),
+             tickfont = list(
+               size = 14,
+               color = 'rgb(107, 107, 107)')),
+           legend = list(x = 0.8, y = 1, bgcolor = 'rgba(255, 255, 255, 0)', bordercolor = 'rgba(255, 255, 255, 0)'),
+           barmode = 'group', bargap = 0.15)
+  return(p)
+}
+plot_bar(teams, 2)
+plot_bar(teams, 3)
+plot_bar(teams, 4)
+```
+
+We can see from the Round 4 Teams plot that the top team in the Western Conference, the Warriors, need to make it to the Finals if the NBA wants to make around $160 million as opposed to around $120 million.
