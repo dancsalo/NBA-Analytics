@@ -1,0 +1,67 @@
+---
+title: "MC Simulation for Consecutive Losses"
+author: "Dan Salo"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The required inputs are `p_win`, which is held at 80\%, `n_games`, which
+
+```{r mc-simulation}
+p_win <- 0.8 # probability to win a game
+n_games <- 82 # number of games in the season
+S <- 100000 # number of monte carlo samples to draw.
+last_game <- TRUE
+tally <- c()
+total_mean <- c()
+
+for (i in seq(0, S-1)) {
+  wins = runif(n_games, 0, 1) < p_win
+  for (w in wins) {
+    if (w == FALSE && last_game == FALSE) {
+      tally[i] <- 0
+      break
+    } else {
+      last_game <- w
+      tally[i] <- 1
+    }
+  }
+  total_mean <- c(total_mean, sum(tally)/i)
+}
+```
+
+We can visualize the simulation's progress with a simple line chart:
+
+```{r simulation-plot, message=FALSE, warning=FALSE}
+library(plotly)
+data <- data.frame(seq(length(total_mean)), total_mean)
+names(data) <- c('x','y')
+p <- plot_ly(data, x = ~x, y = ~y, name = 'trace 0', type = 'scatter', mode = 'lines', line=list(color='rgb(0,140,168)')) %>%
+      layout(title = sprintf('%d Monte Carlo Simulations', S),
+         xaxis = list(
+           title = "Cumulative Samples",
+           tickfont = list(
+             size = 14,
+             color = 'rgb(107, 107, 107)')),
+         yaxis = list(
+           title = 'Probability of Losing Consecutive Games',
+           titlefont = list(
+             size = 16,
+             color = 'rgb(107, 107, 107)'),
+           tickfont = list(
+             size = 14,
+             color = 'rgb(107, 107, 107)')))
+p
+```
+
+By comupting `mean(tally)`, the code predicts that the team will have a `r mean(tally)*100`% chance of not losing consecutive games in the 82-game season. But how precise is the estimate?
+
+```{r variance}
+var_phi = n_games * p_win*(1 - p_win)
+mc_var = var_phi / S
+```
+
+The variance of the MC simulation is `r print(mc_var)`, which means the true estimate is the given percentage range with 95% probability: (`r (mean(tally) - sqrt(mc_var) *2) * 100`%, `r (mean(tally) + sqrt(mc_var) * 2) * 100`%).
